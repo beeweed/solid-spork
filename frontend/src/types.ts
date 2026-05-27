@@ -1,9 +1,10 @@
-export type ProviderId = 'openrouter' | 'groq'
+export type ProviderId = 'openrouter' | 'groq' | 'nvidia-nim'
 
 /** Map of provider id → display label */
 export const PROVIDER_LABELS: Record<ProviderId, string> = {
   openrouter: 'OpenRouter',
   groq: 'Groq AI',
+  'nvidia-nim': 'NVIDIA NIM',
 }
 
 export interface UISettings {
@@ -11,6 +12,7 @@ export interface UISettings {
   model: string
   openrouterApiKey: string
   groqApiKey: string
+  nvidiaNimApiKey: string
 }
 
 export interface ModelOption {

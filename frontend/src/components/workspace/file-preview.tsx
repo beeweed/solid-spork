@@ -1,5 +1,3 @@
-import { useMemo } from 'react'
-
 import type { StoredFile } from '@/types'
 
 interface FilePreviewProps {

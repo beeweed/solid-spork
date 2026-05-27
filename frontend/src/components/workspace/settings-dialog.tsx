@@ -19,6 +19,7 @@ interface SettingsDialogProps {
 const API_KEY_PLACEHOLDERS: Record<ProviderId, string> = {
   openrouter: 'sk-or-v1-...',
   groq: 'gsk_...',
+  'nvidia-nim': 'nvapi-...',
 }
 
 export function SettingsDialog({
@@ -48,8 +49,14 @@ export function SettingsDialog({
     setDraft((current) => ({ ...current, [field]: value }))
   }, [])
 
+  function providerApiKey(provider: ProviderId): string {
+    if (provider === 'groq') return draft.groqApiKey
+    if (provider === 'nvidia-nim') return draft.nvidiaNimApiKey
+    return draft.openrouterApiKey
+  }
+
   async function handleRefresh(provider: ProviderId) {
-    const key = provider === 'groq' ? draft.groqApiKey : draft.openrouterApiKey
+    const key = providerApiKey(provider)
     if (!key.trim()) return
     setLoadingProvider(provider)
     setFetchError(null)
@@ -90,10 +97,14 @@ export function SettingsDialog({
           </div>
 
           <div className="mt-8 grid gap-5">
-            {([ 'openrouter', 'groq' ] as ProviderId[]).map((provider) => {
-              const keyField = provider === 'groq' ? 'groqApiKey' : 'openrouterApiKey'
+            {([ 'openrouter', 'groq', 'nvidia-nim' ] as ProviderId[]).map((provider) => {
+              const keyField = ((): keyof UISettings => {
+                if (provider === 'groq') return 'groqApiKey'
+                if (provider === 'nvidia-nim') return 'nvidiaNimApiKey'
+                return 'openrouterApiKey'
+              })()
               return (
-                <label key={provider} className="grid gap-2 text-sm text-zinc-300">
+                <div key={provider} className="grid gap-2 text-sm text-zinc-300">
                   <span className="uppercase tracking-[0.25em] text-zinc-500">{PROVIDER_LABELS[provider]} API key</span>
                   <div className="flex gap-2">
                     <input
@@ -118,7 +129,7 @@ export function SettingsDialog({
                       Fetch
                     </Button>
                   </div>
-                </label>
+                </div>
               )
             })}
 

@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS: UISettings = {
   model: '',
   openrouterApiKey: '',
   groqApiKey: '',
+  nvidiaNimApiKey: '',
 }
 const MAX_ITERATIONS = 1000
 
@@ -34,6 +35,10 @@ function readStoredSettings(): UISettings {
     // Migrate from old single apiKey format
     if (parsed.apiKey && !parsed.openrouterApiKey) {
       parsed.openrouterApiKey = parsed.apiKey
+    }
+    // Migrate from pre-NVIDIA-NIM settings
+    if (parsed.nvidiaNimApiKey === undefined) {
+      parsed.nvidiaNimApiKey = ''
     }
     return { ...DEFAULT_SETTINGS, ...parsed }
   } catch {
@@ -367,7 +372,10 @@ export default function App() {
   }
 
   function activeApiKey(): string {
-    return activeProvider() === 'groq' ? settings.groqApiKey : settings.openrouterApiKey
+    const provider = activeProvider()
+    if (provider === 'groq') return settings.groqApiKey
+    if (provider === 'nvidia-nim') return settings.nvidiaNimApiKey
+    return settings.openrouterApiKey
   }
 
   async function handleSubmit() {
