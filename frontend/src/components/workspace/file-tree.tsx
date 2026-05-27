@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, FileCode2, Folder } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 
 import type { FileTreeNode, StoredFile } from '@/types'
 
@@ -56,54 +56,27 @@ function TreeNode({
 }
 
 export function FileTree({ tree, files, selectedPath, onSelect }: FileTreeProps) {
-  const selectedFile = useMemo(
-    () => files.find((file) => file.path === selectedPath) ?? files[0] ?? null,
-    [files, selectedPath],
-  )
-
   return (
-    <div className="grid min-h-[28rem] gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
-      <section className="rounded-[1.75rem] border border-white/10 bg-black/30 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Explorer</p>
-            <h2 className="mt-1 text-lg font-semibold text-white">Local file storage</h2>
+    <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded-[1.75rem] border border-white/10 bg-black/30 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur">
+      <div className="mb-4 flex shrink-0 items-center justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Explorer</p>
+          <h2 className="mt-1 text-lg font-semibold text-white">Local file storage</h2>
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-zinc-300">{files.length} files</span>
+      </div>
+
+      <div className="overflow-y-auto space-y-1">
+        {tree.length ? (
+          tree.map((node) => (
+            <TreeNode key={node.path} node={node} depth={0} selectedPath={selectedPath} onSelect={onSelect} />
+          ))
+        ) : (
+          <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-10 text-sm text-zinc-500">
+            Generated files appear here after the agent uses file tools.
           </div>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-zinc-300">{files.length} files</span>
-        </div>
-
-        <div className="space-y-1">
-          {tree.length ? (
-            tree.map((node) => (
-              <TreeNode key={node.path} node={node} depth={0} selectedPath={selectedPath} onSelect={onSelect} />
-            ))
-          ) : (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-10 text-sm text-zinc-500">
-              Generated files appear here after the agent uses file tools.
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-white/10 bg-zinc-950/80 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Preview</p>
-            <h2 className="mt-1 max-w-full break-all text-sm font-medium text-zinc-200">
-              {selectedFile?.path ?? 'No file selected'}
-            </h2>
-          </div>
-          {selectedFile ? (
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-zinc-400">
-              {selectedFile.size.toLocaleString()} bytes
-            </span>
-          ) : null}
-        </div>
-
-        <pre className="min-h-[20rem] overflow-x-auto rounded-[1.25rem] border border-white/8 bg-black/60 p-4 font-mono text-[12px] leading-6 text-zinc-300">
-          {selectedFile?.content || 'Choose a file from the explorer to inspect its content.'}
-        </pre>
-      </section>
-    </div>
+        )}
+      </div>
+    </section>
   )
 }

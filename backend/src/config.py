@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = 'Agent Workbench API'
     openrouter_base_url: str = 'https://openrouter.ai/api/v1'
+    groq_base_url: str = 'https://api.groq.com/openai/v1'
     app_title: str = 'Agent Workbench'
     site_url: str = 'http://localhost:3000'
     cors_origins: List[str] = Field(default_factory=lambda: ['*'])

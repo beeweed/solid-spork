@@ -52,7 +52,7 @@ export function ChatPanel({
   )
 
   return (
-    <section className="grid min-h-[42rem] grid-rows-[auto_minmax(0,1fr)_auto] rounded-[2rem] border border-white/10 bg-black/30 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur xl:min-h-[calc(100vh-8.5rem)]">
+    <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-[2rem] border border-white/10 bg-black/30 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-4 px-2 pb-4 pt-1">
         <div>
           <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Live session</p>
@@ -70,18 +70,18 @@ export function ChatPanel({
       <Separator.Root className="mb-4 h-px bg-white/8" />
 
       <ScrollArea.Root className="min-h-0 overflow-hidden">
-        <ScrollArea.Viewport ref={viewportRef} className="h-full pr-3">
+        <ScrollArea.Viewport ref={viewportRef} className="h-full max-w-full pr-3">
           <div className="space-y-7 pb-6">
             {messages.length ? (
               messages.map((message) => (
-                <article key={message.id} className="space-y-3">
+                <article key={message.id} className="max-w-full space-y-3">
                   {message.role === 'user' ? (
-                    <div className="ml-auto max-w-[90%] rounded-[1.6rem] rounded-br-md border border-red-400/20 bg-red-500/12 px-5 py-4 text-sm leading-7 text-red-50 shadow-[0_12px_48px_rgba(239,68,68,0.1)] sm:max-w-[78%]">
+                    <div className="ml-auto max-w-[90%] break-words rounded-[1.6rem] rounded-br-md border border-red-400/20 bg-red-500/12 px-5 py-4 text-sm leading-7 text-red-50 shadow-[0_12px_48px_rgba(239,68,68,0.1)] sm:max-w-[78%]">
                       {message.content}
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      <div className="text-sm leading-7 whitespace-pre-wrap text-zinc-100">{message.content || (message.status === 'streaming' ? '' : ' ')}</div>
+                    <div className="max-w-full space-y-3">
+                      <div className="break-words text-sm leading-7 whitespace-pre-wrap text-zinc-100">{message.content || (message.status === 'streaming' ? '' : ' ')}</div>
                       {message.chips.length ? (
                         <div className="flex flex-wrap gap-2">
                           {message.chips.map((chip) => (
@@ -109,7 +109,7 @@ export function ChatPanel({
               emptyState
             )}
             <ThinkingIndicator active={thinking} />
-            {error ? <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">{error}</div> : null}
+            {error ? <div className="max-w-full break-words rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">{error}</div> : null}
           </div>
         </ScrollArea.Viewport>
         <ScrollArea.Scrollbar className="flex w-2 touch-none p-0.5" orientation="vertical">

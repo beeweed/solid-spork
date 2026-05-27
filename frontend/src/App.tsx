@@ -3,17 +3,20 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { ChatPanel } from '@/components/workspace/chat-panel'
+import { FilePreview } from '@/components/workspace/file-preview'
 import { FileTree } from '@/components/workspace/file-tree'
 import { SettingsDialog } from '@/components/workspace/settings-dialog'
 import { BACKEND_URL, createId } from '@/lib/config'
 import { buildFileTree, formatFileForRead, listFiles, readFile, writeFile } from '@/lib/indexeddb'
-import type { ModelOption, StoredFile, TranscriptMessage, UISettings } from '@/types'
+import type { ModelOption, ProviderId, StoredFile, TranscriptMessage, UISettings } from '@/types'
+import { PROVIDER_LABELS } from '@/types'
 
 const SETTINGS_KEY = 'agent-workbench-settings'
 const DEFAULT_SETTINGS: UISettings = {
   provider: 'openrouter',
-  apiKey: '',
   model: '',
+  openrouterApiKey: '',
+  groqApiKey: '',
 }
 const MAX_ITERATIONS = 1000
 
@@ -27,7 +30,12 @@ function readStoredSettings(): UISettings {
     if (!raw) {
       return DEFAULT_SETTINGS
     }
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+    const parsed = JSON.parse(raw)
+    // Migrate from old single apiKey format
+    if (parsed.apiKey && !parsed.openrouterApiKey) {
+      parsed.openrouterApiKey = parsed.apiKey
+    }
+    return { ...DEFAULT_SETTINGS, ...parsed }
   } catch {
     return DEFAULT_SETTINGS
   }
@@ -40,11 +48,12 @@ function toConversation(messages: TranscriptMessage[]) {
 }
 
 async function parseError(response: Response) {
+  const text = await response.text()
   try {
-    const payload = await response.json()
+    const payload = JSON.parse(text)
     return payload.detail || payload.message || JSON.stringify(payload)
   } catch {
-    return await response.text()
+    return text
   }
 }
 
@@ -58,7 +67,6 @@ export default function App() {
   const [streaming, setStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsLoading, setSettingsLoading] = useState(false)
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const [currentIteration, setCurrentIteration] = useState(0)
@@ -77,13 +85,12 @@ export default function App() {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
   }, [settings])
 
-  useEffect(() => {
-    if (settings.apiKey.trim()) {
-      void refreshModels(settings.apiKey)
-    }
-  }, [settings.apiKey])
-
   const tree = useMemo(() => buildFileTree(files), [files])
+
+  const selectedFile = useMemo(
+    () => files.find((file) => file.path === selectedPath) ?? null,
+    [files, selectedPath],
+  )
 
   async function refreshFiles() {
     const nextFiles = await listFiles()
@@ -91,16 +98,15 @@ export default function App() {
     setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null)
   }
 
-  async function refreshModels(apiKey: string) {
+  async function refreshModels(apiKey: string, provider: ProviderId): Promise<ModelOption[]> {
     if (!apiKey.trim()) {
-      setSettingsError('Add an OpenRouter API key before fetching models.')
-      return
+      setSettingsError('Add an API key before fetching models.')
+      return []
     }
 
-    setSettingsLoading(true)
     setSettingsError(null)
     try {
-      const response = await fetch(`${BACKEND_URL}/api/providers/openrouter/models`, {
+      const response = await fetch(`${BACKEND_URL}/api/providers/${provider}/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey }),
@@ -112,25 +118,17 @@ export default function App() {
 
       const payload = (await response.json()) as { models: ModelOption[] }
       setModels(payload.models)
-      setSettings((current) => ({
-        ...current,
-        model:
-          current.model && payload.models.some((model) => model.id === current.model)
-            ? current.model
-            : payload.models.find((model) => model.supports_tools)?.id ?? payload.models[0]?.id ?? '',
-      }))
+      return payload.models
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : 'Unable to load models.')
-    } finally {
-      setSettingsLoading(false)
+      return []
     }
   }
 
   async function handleSaveSettings(nextSettings: UISettings) {
-    setSettings(nextSettings)
-    if (nextSettings.apiKey.trim()) {
-      await refreshModels(nextSettings.apiKey)
-    }
+    const model = models.find((m) => m.id === nextSettings.model)
+    const provider = (model?.provider as ProviderId) ?? nextSettings.provider
+    setSettings({ ...nextSettings, provider })
   }
 
   async function submitToolResult(payload: {
@@ -182,6 +180,15 @@ export default function App() {
             error: {
               type: 'file_not_found',
               message: `File not found: ${args.file_path}`,
+              file_path: args.file_path,
+            },
+          })
+        } else if (/\.(png|jpg|jpeg|gif|bmp|webp|svg|ico|avif|mp4|mp3|wav|ogg|webm|zip|gz|tar|pdf|bin|exe|dll|so|dmg|iso)$/i.test(args.file_path)) {
+          isError = true
+          content = JSON.stringify({
+            error: {
+              type: 'binary_file',
+              message: `Cannot read "${args.file_path.split('/').pop()}" (this model does not support image/binary input). Inform the user.`,
               file_path: args.file_path,
             },
           })
@@ -354,12 +361,22 @@ export default function App() {
     }
   }
 
+  function activeProvider(): ProviderId {
+    const model = models.find((m) => m.id === settings.model)
+    return (model?.provider as ProviderId) ?? settings.provider
+  }
+
+  function activeApiKey(): string {
+    return activeProvider() === 'groq' ? settings.groqApiKey : settings.openrouterApiKey
+  }
+
   async function handleSubmit() {
     if (streaming || !draft.trim()) {
       return
     }
-    if (!settings.apiKey.trim() || !settings.model.trim()) {
-      setRuntimeError('Add an OpenRouter API key and select a model in settings before chatting.')
+    const apiKey = activeApiKey()
+    if (!apiKey.trim() || !settings.model.trim()) {
+      setRuntimeError('Add an API key and select a model in settings before chatting.')
       setSettingsOpen(true)
       return
     }
@@ -386,6 +403,7 @@ export default function App() {
       status: 'streaming',
     }
 
+    const provider = activeProvider()
     const outgoingMessages = toConversation([...conversationRef.current, nextUserMessage])
     setMessages((current) => [...current, nextUserMessage, nextAssistantMessage])
     setDraft('')
@@ -396,9 +414,9 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: outgoingMessages,
-          apiKey: settings.apiKey,
+          apiKey,
           model: settings.model,
-          provider: settings.provider,
+          provider,
         }),
       })
 
@@ -430,7 +448,7 @@ export default function App() {
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.38em] text-zinc-500">Agent Workbench</p>
-              <p className="mt-1 text-sm text-zinc-400">IndexedDB file workspace · OpenRouter runtime · FastAPI SSE</p>
+              <p className="mt-1 text-sm text-zinc-400">IndexedDB file workspace · Multi-provider runtime · FastAPI SSE</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -449,7 +467,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(24rem,0.95fr)]">
+        <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,0.65fr)_minmax(0,0.75fr)] gap-4">
           <ChatPanel
             messages={messages}
             draft={draft}
@@ -458,12 +476,13 @@ export default function App() {
             currentIteration={currentIteration}
             maxIterations={MAX_ITERATIONS}
             activeModel={settings.model}
-            providerLabel="OpenRouter"
+            providerLabel={PROVIDER_LABELS[activeProvider()] ?? activeProvider()}
             streaming={streaming}
             thinking={thinking}
             error={runtimeError}
           />
-          <FileTree tree={tree} files={files} selectedPath={selectedPath} onSelect={setSelectedPath} />
+          <FileTree tree={tree} selectedPath={selectedPath} onSelect={setSelectedPath} files={files} />
+          <FilePreview file={selectedFile} />
         </main>
       </div>
 
@@ -472,7 +491,6 @@ export default function App() {
         onOpenChange={setSettingsOpen}
         settings={settings}
         models={models}
-        loading={settingsLoading}
         error={settingsError}
         onSave={handleSaveSettings}
         onRefreshModels={refreshModels}

@@ -1,4 +1,5 @@
 from src.config import Settings
+from src.services.groq import GroqService
 from src.services.openrouter import OpenRouterService
 
 
@@ -6,6 +7,7 @@ class ProviderRegistry:
     def __init__(self, settings: Settings) -> None:
         self._providers = {
             'openrouter': OpenRouterService(settings),
+            'groq': GroqService(settings),
         }
 
     def get(self, provider_id: str):

@@ -1,9 +1,16 @@
-export type ProviderId = 'openrouter'
+export type ProviderId = 'openrouter' | 'groq'
+
+/** Map of provider id → display label */
+export const PROVIDER_LABELS: Record<ProviderId, string> = {
+  openrouter: 'OpenRouter',
+  groq: 'Groq AI',
+}
 
 export interface UISettings {
   provider: ProviderId
-  apiKey: string
   model: string
+  openrouterApiKey: string
+  groqApiKey: string
 }
 
 export interface ModelOption {
