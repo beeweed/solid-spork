@@ -1,4 +1,6 @@
-export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, '') || 'http://localhost:8000'
+const rawUrl = import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, '')
+const isDefault = !rawUrl || rawUrl === 'http://localhost:8000'
+export const BACKEND_URL = isDefault ? '' : rawUrl
 
 export function createId(prefix: string): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {

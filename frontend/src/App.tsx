@@ -435,7 +435,7 @@ export default function App() {
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-zinc-300 lg:inline-flex">
-              Backend: {BACKEND_URL}
+              Backend: {BACKEND_URL || '(proxy)'}
             </span>
             <Button
               type="button"
