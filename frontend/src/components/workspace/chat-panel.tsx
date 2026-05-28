@@ -1,9 +1,6 @@
 import * as ScrollArea from '@radix-ui/react-scroll-area'
-import * as Separator from '@radix-ui/react-separator'
-import { SendHorizonal } from 'lucide-react'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
-import { Button } from '@/components/ui/button'
 import { ThinkingIndicator } from '@/components/workspace/thinking-indicator'
 import type { TranscriptMessage } from '@/types'
 
@@ -14,11 +11,70 @@ interface ChatPanelProps {
   onSubmit: () => void
   currentIteration: number
   maxIterations: number
-  activeModel: string
-  providerLabel: string
   streaming: boolean
   thinking: boolean
   error: string | null
+  onMenuClick: () => void
+  onResetClick: () => void
+  onSettingsClick: () => void
+}
+
+function FileCard({ chip }: { chip: { label: string; path: string; status: string } }) {
+  const isDone = chip.status === 'done'
+  const isPending = chip.status === 'pending'
+  const isError = chip.status === 'error'
+
+  return (
+    <div
+      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[#2a2a2c] border cursor-pointer transition-all duration-200 group ${
+        isError
+          ? 'border-red-500/20'
+          : isPending
+            ? 'border-primary/20 animate-pulse'
+            : 'border-emerald-500/20 hover:bg-[#323234]'
+      }`}
+    >
+      <div
+        className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+          isError ? 'bg-red-500/10' : isPending ? 'bg-primary/10' : 'bg-emerald-500/10'
+        }`}
+      >
+        {isDone ? (
+          <svg className="w-5 h-5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        ) : isPending ? (
+          <svg className="w-5 h-5 text-primary animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-foreground truncate">{chip.path}</span>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-md ${
+              isError
+                ? 'bg-red-500/15 text-red-400'
+                : isPending
+                  ? 'bg-primary/15 text-primary animate-pulse'
+                  : 'bg-emerald-500/15 text-emerald-400'
+            }`}
+          >
+            {isError ? 'error' : isPending ? 'writing...' : 'created'}
+          </span>
+        </div>
+        <span className="text-xs text-muted-foreground">{chip.label}</span>
+      </div>
+      <svg className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+      </svg>
+    </div>
+  )
 }
 
 export function ChatPanel({
@@ -28,13 +84,15 @@ export function ChatPanel({
   onSubmit,
   currentIteration,
   maxIterations,
-  activeModel,
-  providerLabel,
   streaming,
   thinking,
   error,
+  onMenuClick,
+  onResetClick,
+  onSettingsClick,
 }: ChatPanelProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -42,74 +100,180 @@ export function ChatPanel({
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' })
   }, [messages, thinking])
 
-  const emptyState = useMemo(
-    () => (
-      <div className="rounded-[2rem] border border-dashed border-white/10 bg-white/[0.02] px-6 py-14 text-center text-sm leading-7 text-zinc-500">
-        Start with a request such as creating a project structure, reading an existing file, or generating code into the local browser workspace.
-      </div>
-    ),
-    [],
-  )
+  const isStreaming = (message: TranscriptMessage) =>
+    message.role === 'assistant' && message.status === 'streaming'
 
   return (
-    <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-[2rem] border border-white/10 bg-black/30 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur">
-      <div className="flex flex-wrap items-center justify-between gap-4 px-2 pb-4 pt-1">
-        <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Live session</p>
-          <h1 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">Production ReAct agent</h1>
+    <div className="flex flex-col h-full">
+      {/* Chat Header */}
+      <div className="flex items-center justify-between px-5 py-4 bg-[#252525] border-b border-border/30 shrink-0">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onMenuClick}
+            className="p-1.5 rounded-xl text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200 lg:hidden"
+            title="Chat History"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg shadow-primary/20">
+            <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-sm font-semibold text-foreground">Vibe Coder</h1>
+            <p className="text-[11px] text-muted-foreground">Autonomous AI Agent</p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-300">
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">{providerLabel}</span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">{activeModel || 'No model selected'}</span>
-          <span className="rounded-full border border-red-500/25 bg-red-500/10 px-3 py-1.5 text-red-100">
-            Iteration {currentIteration} / {maxIterations}
-          </span>
+        <div className="flex items-center gap-1">
+          {/* Menu Button (desktop) */}
+          <button
+            onClick={onMenuClick}
+            className="hidden lg:flex p-2.5 rounded-xl text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200"
+            title="Chat History"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          {/* Reset Button */}
+          <button
+            onClick={onResetClick}
+            className="p-2.5 rounded-xl text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200"
+            title="Reset Session"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+          {/* Settings Button */}
+          <button
+            onClick={onSettingsClick}
+            className="p-2.5 rounded-xl text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200"
+            title="Settings"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
         </div>
       </div>
 
-      <Separator.Root className="mb-4 h-px bg-white/8" />
+      {/* Messages Area */}
+      <ScrollArea.Root className="flex-1 min-h-0 overflow-hidden bg-[#1e1e1e]">
+        <ScrollArea.Viewport ref={viewportRef} className="h-full">
+          <div className="p-5 space-y-4">
+            {messages.length === 0 && (
+              <div className="flex items-center justify-center h-full min-h-[200px]">
+                <div className="text-center">
+                  <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center">
+                    <svg className="w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                    </svg>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Describe what you want to build...</p>
+                </div>
+              </div>
+            )}
 
-      <ScrollArea.Root className="min-h-0 overflow-hidden">
-        <ScrollArea.Viewport ref={viewportRef} className="h-full max-w-full pr-3">
-          <div className="space-y-7 pb-6">
-            {messages.length ? (
-              messages.map((message) => (
-                <article key={message.id} className="max-w-full space-y-3">
-                  {message.role === 'user' ? (
-                    <div className="ml-auto max-w-[90%] break-words rounded-[1.6rem] rounded-br-md border border-red-400/20 bg-red-500/12 px-5 py-4 text-sm leading-7 text-red-50 shadow-[0_12px_48px_rgba(239,68,68,0.1)] sm:max-w-[78%]">
-                      {message.content}
+            {messages.map((message) => (
+              <div key={message.id}>
+                {message.role === 'user' ? (
+                  <div className="flex gap-3 justify-end animate-fade-in">
+                    <div className="max-w-[85%] px-4 py-3 rounded-2xl rounded-tr-md bg-primary text-primary-foreground shadow-lg shadow-primary/10">
+                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                     </div>
-                  ) : (
-                    <div className="max-w-full space-y-3">
-                      <div className="break-words text-sm leading-7 whitespace-pre-wrap text-zinc-100">{message.content || (message.status === 'streaming' ? '' : ' ')}</div>
-                      {message.chips.length ? (
-                        <div className="flex flex-wrap gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0">
+                      <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-3 animate-fade-in">
+                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center flex-shrink-0">
+                      <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs font-medium text-muted-foreground mb-2 block">Vibe Coder</span>
+
+                      {currentIteration > 0 && (
+                        <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-primary/10 border border-primary/20 mb-3">
+                          <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></div>
+                          <span className="text-[10px] font-medium text-primary">Iteration {currentIteration}/{maxIterations}</span>
+                        </div>
+                      )}
+
+                      {message.content && (
+                        <div className="text-sm leading-relaxed text-foreground/90 mb-3 whitespace-pre-wrap">
+                          {message.content}
+                          {isStreaming(message) && (
+                            <span className="inline-block w-[2px] h-[1em] bg-primary ml-0.5 animate-pulse align-middle" />
+                          )}
+                        </div>
+                      )}
+
+                      {message.chips.length > 0 && (
+                        <div className="space-y-2 mb-3">
                           {message.chips.map((chip) => (
-                            <div
-                              key={chip.id}
-                              className={`inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${
-                                chip.status === 'error'
-                                  ? 'border-red-500/30 bg-red-500/10 text-red-100'
-                                  : chip.status === 'done'
-                                    ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-100'
-                                    : 'border-white/10 bg-white/5 text-zinc-200'
-                              }`}
-                            >
-                              <span className="uppercase tracking-[0.18em]">{chip.label}</span>
-                              <span className="truncate text-zinc-300">{chip.path}</span>
-                            </div>
+                            <FileCard key={chip.id} chip={chip} />
                           ))}
                         </div>
-                      ) : null}
+                      )}
+
+                      {message.chips.map((chip) => (
+                        <div key={chip.id} className="rounded-xl bg-[#2d2d2f] border border-border/30 overflow-hidden mb-2">
+                          <div className="flex items-center gap-3 px-3 py-2.5">
+                            <div className="w-6 h-6 rounded-md bg-blue-500/10 flex items-center justify-center">
+                              <svg className="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                              </svg>
+                            </div>
+                            <span className="text-xs font-mono text-muted-foreground">{chip.label.replace(':', '')}</span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                chip.status === 'error'
+                                  ? 'bg-red-500/15 text-red-400'
+                                  : chip.status === 'done'
+                                    ? 'bg-emerald-500/15 text-emerald-400'
+                                    : 'bg-primary/15 text-primary'
+                              }`}
+                            >
+                              {chip.status === 'error' ? 'error' : chip.status === 'done' ? 'success' : 'pending'}
+                            </span>
+                            <svg className="w-4 h-4 text-muted-foreground ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  )}
-                </article>
-              ))
-            ) : (
-              emptyState
-            )}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            <div ref={messagesEndRef} />
+
             <ThinkingIndicator active={thinking} />
-            {error ? <div className="max-w-full break-words rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">{error}</div> : null}
+
+            {error ? (
+              <div className="flex gap-3">
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-red-500/20 to-red-500/10 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div className="flex-1 px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-sm text-red-300">
+                  {error}
+                </div>
+              </div>
+            ) : null}
           </div>
         </ScrollArea.Viewport>
         <ScrollArea.Scrollbar className="flex w-2 touch-none p-0.5" orientation="vertical">
@@ -117,9 +281,9 @@ export function ChatPanel({
         </ScrollArea.Scrollbar>
       </ScrollArea.Root>
 
-      <div className="pt-4">
-        <Separator.Root className="mb-4 h-px bg-white/8" />
-        <div className="flex flex-col gap-3 rounded-[1.75rem] border border-white/10 bg-black/70 p-3 sm:flex-row sm:items-end">
+      {/* Input Area */}
+      <div className="p-4 bg-[#252525] border-t border-border/30 shrink-0">
+        <div className="relative">
           <textarea
             value={draft}
             onChange={(event) => onDraftChange(event.target.value)}
@@ -129,21 +293,21 @@ export function ChatPanel({
                 onSubmit()
               }
             }}
-            rows={4}
-            placeholder="Ask the agent to read, create, or rewrite files in browser storage..."
-            className="min-h-[7.5rem] flex-1 resize-none rounded-[1.4rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-sm leading-7 text-white outline-none placeholder:text-zinc-600 focus:border-red-400/60"
+            placeholder="Describe what you want to build..."
+            className="w-full min-h-[100px] max-h-[200px] bg-[#323234] rounded-2xl px-4 py-4 pr-14 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 border border-transparent focus:border-primary/30 transition-all"
+            rows={3}
           />
-          <Button
-            type="button"
+          <button
             onClick={onSubmit}
             disabled={streaming || !draft.trim()}
-            className="h-12 rounded-[1.2rem] bg-red-500 px-5 text-white hover:bg-red-400 disabled:bg-zinc-800 disabled:text-zinc-500"
+            className="absolute bottom-3 right-3 h-10 w-10 rounded-xl bg-primary hover:bg-primary/90 flex items-center justify-center shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <SendHorizonal className="h-4 w-4" />
-            Send
-          </Button>
+            <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </svg>
+          </button>
         </div>
       </div>
-    </section>
+    </div>
   )
 }
