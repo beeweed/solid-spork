@@ -1,8 +1,8 @@
 import asyncio
 import json
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Awaitable, Callable
-from uuid import uuid4
 
 from src.api_models import ToolResultSubmission
 
@@ -39,7 +39,11 @@ class AgentSessionManager:
         self._sessions: dict[str, AgentRunSession] = {}
 
     async def create_session(self) -> str:
-        return f'session_{uuid4().hex}'
+        async with self._lock:
+            while True:
+                session_id = f'{secrets.randbelow(10**20):020d}'
+                if session_id not in self._sessions:
+                    return session_id
 
     async def start_stream(
         self,

@@ -10,6 +10,8 @@ from src.services.session_manager import AgentSessionManager
 async def test_session_manager_resolves_tool_result():
     manager = AgentSessionManager()
     session_id = await manager.create_session()
+    assert session_id.isdigit()
+    assert len(session_id) == 20
     await manager.register_tool_call(session_id, 'tool_1')
 
     async def submit_later():

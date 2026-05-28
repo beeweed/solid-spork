@@ -41,3 +41,4 @@ Agent Workbench is a production-grade browser-based AI coding workspace with a R
 | IndexedDB file storage bridge | done | `specs/indexeddb-file-storage/document.md` |
 | Responsive workspace frontend | done | `specs/frontend-workspace/document.md` |
 | Resumable stream sessions | in-progress | `specs/resumable-stream-sessions/document.md` |
+| Chat management controls and file deletion | done | `specs/chat-management-controls/document.md` |

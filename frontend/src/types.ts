@@ -49,6 +49,7 @@ export interface StoredFile {
 export interface ChatSession {
   id: string
   title: string
+  sessionId?: string
   createdAt: string
   updatedAt: string
   messages: TranscriptMessage[]

@@ -1,7 +1,11 @@
+import { Loader2, Trash2 } from 'lucide-react'
+
 import type { StoredFile } from '@/types'
 
 interface FilePreviewProps {
   file: StoredFile | null
+  deleting: boolean
+  onDeleteFile: (path: string) => void
 }
 
 function getFileIcon(path: string): { color: string } {
@@ -13,21 +17,26 @@ function getFileIcon(path: string): { color: string } {
   return { color: 'text-green-400' }
 }
 
-export function FilePreview({ file }: FilePreviewProps) {
+export function FilePreview({ file, deleting, onDeleteFile }: FilePreviewProps) {
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#1e1e1e] h-full">
       {/* Editor Tabs Bar */}
       <div className="flex items-center h-10 bg-[#1e1e1e] border-b border-border/30 px-2 gap-1 shrink-0 overflow-x-auto">
         {file ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-background border-t-2 border-t-primary rounded-t-lg shrink-0">
+          <div className="flex min-w-0 items-center gap-2 px-3 py-1.5 bg-background border-t-2 border-t-primary rounded-t-lg shrink-0">
             <svg className={`w-4 h-4 ${getFileIcon(file.path).color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
             </svg>
-            <span className="text-xs font-medium text-foreground">{file.path.split('/').pop()}</span>
-            <button className="p-0.5 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors">
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+            <span className="min-w-0 truncate text-xs font-medium text-foreground">{file.path.split('/').pop()}</span>
+            <button
+              type="button"
+              onClick={() => onDeleteFile(file.path)}
+              disabled={deleting}
+              className="inline-flex items-center gap-1 rounded-md border border-red-500/20 px-2 py-1 text-[11px] font-medium text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+              title="Delete file"
+            >
+              {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              <span>Delete</span>
             </button>
           </div>
         ) : (

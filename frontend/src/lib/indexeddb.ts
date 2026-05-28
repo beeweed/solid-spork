@@ -87,6 +87,13 @@ export async function listFiles(): Promise<StoredFile[]> {
   })
 }
 
+export async function deleteFile(path: string): Promise<void> {
+  const normalizedPath = normalizePath(path)
+  return withStore(FILE_STORE, 'readwrite', async (store) => {
+    await requestToPromise(store.delete(normalizedPath))
+  })
+}
+
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)

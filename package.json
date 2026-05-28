@@ -2,6 +2,6 @@
   "name": "agent-workbench",
   "private": true,
   "scripts": {
-    "build:local": "bash -lc 'cd frontend && bun run build && cd ../backend && pytest -q'"
+    "build:local": "bash -lc 'cd frontend && bun run build && cd ../backend && . .venv/bin/activate && pytest -q'"
   }
 }

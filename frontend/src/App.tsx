@@ -6,7 +6,7 @@ import { FilePreview } from '@/components/workspace/file-preview'
 import { FileTree } from '@/components/workspace/file-tree'
 import { SettingsDialog } from '@/components/workspace/settings-dialog'
 import { BACKEND_URL, createId } from '@/lib/config'
-import { buildFileTree, deleteChat, formatFileForRead, listChats, listFiles, readFile, saveChat, writeFile } from '@/lib/indexeddb'
+import { buildFileTree, deleteChat, deleteFile, formatFileForRead, listChats, listFiles, readFile, saveChat, writeFile } from '@/lib/indexeddb'
 import type { ChatSession, ModelOption, ProviderId, StoredFile, TranscriptMessage, UISettings } from '@/types'
 
 const SETTINGS_KEY = 'agent-workbench-settings'
@@ -109,6 +109,14 @@ function buildResumeUrl(sessionId: string, after: number) {
   return `${BACKEND_URL}/api/chat/stream/${encodeURIComponent(sessionId)}?${params.toString()}`
 }
 
+function deriveChatTitle(messages: TranscriptMessage[], fallback = 'New Chat') {
+  const firstUser = messages.find((message) => message.role === 'user' && message.content.trim())
+  if (firstUser) {
+    return firstUser.content.trim().slice(0, 50)
+  }
+  return fallback
+}
+
 export default function App() {
   const [settings, setSettings] = useState<UISettings>(readStoredSettings)
   const [models, setModels] = useState<ModelOption[]>([])
@@ -132,6 +140,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
   const [toast, setToast] = useState<{ message: string; detail?: string; type?: 'success' | 'error' } | null>(null)
+  const [deletingFilePath, setDeletingFilePath] = useState<string | null>(null)
   const conversationRef = useRef<TranscriptMessage[]>(messages)
   const messagesRef = useRef(messages)
   const activeChatIdRef = useRef(activeChatId)
@@ -272,7 +281,11 @@ export default function App() {
   async function refreshFiles() {
     const nextFiles = await listFiles()
     setFiles(nextFiles)
-    setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null)
+    setSelectedPath((current) => (
+      current && nextFiles.some((file) => file.path === current)
+        ? current
+        : nextFiles[0]?.path ?? null
+    ))
   }
 
   async function loadChats() {
@@ -286,10 +299,22 @@ export default function App() {
     const title =
       chat.title !== 'New Chat'
         ? chat.title
-        : msgs.find((m) => m.role === 'user')?.content.slice(0, 50) || 'New Chat'
+        : deriveChatTitle(msgs)
     const updated = { ...chat, title, messages: msgs, updatedAt: new Date().toISOString() }
     setChats((prev) => prev.map((c) => (c.id === chatId ? updated : c)))
     chatsRef.current = chatsRef.current.map((c) => (c.id === chatId ? updated : c))
+    await saveChat(updated)
+  }
+
+  async function persistChatSessionId(chatId: string, sessionId: string) {
+    const chat = chatsRef.current.find((entry) => entry.id === chatId)
+    if (!chat || !sessionId || chat.sessionId === sessionId) {
+      return
+    }
+
+    const updated = { ...chat, sessionId, updatedAt: new Date().toISOString() }
+    setChats((prev) => prev.map((entry) => (entry.id === chatId ? updated : entry)))
+    chatsRef.current = chatsRef.current.map((entry) => (entry.id === chatId ? updated : entry))
     await saveChat(updated)
   }
 
@@ -500,6 +525,7 @@ export default function App() {
             chatId,
             lastEventId: eventId ?? 0,
           })
+          await persistChatSessionId(chatId, String(eventData.sessionId ?? ''))
         } else if (eventId !== null && activeRunRef.current?.assistantId === assistantId) {
           updateActiveRun({ lastEventId: eventId })
         }
@@ -811,6 +837,41 @@ export default function App() {
     }
   }
 
+  async function handleRenameChat(chatId: string, title: string) {
+    const chat = chatsRef.current.find((entry) => entry.id === chatId)
+    if (!chat) {
+      return
+    }
+
+    const nextTitle = title.trim() || deriveChatTitle(chat.messages)
+    const updated = {
+      ...chat,
+      title: nextTitle,
+      updatedAt: new Date().toISOString(),
+    }
+    setChats((prev) => prev.map((entry) => (entry.id === chatId ? updated : entry)))
+    chatsRef.current = chatsRef.current.map((entry) => (entry.id === chatId ? updated : entry))
+    await saveChat(updated)
+    setToast({ message: 'Chat renamed', detail: nextTitle, type: 'success' })
+  }
+
+  async function handleDeleteFile(path: string) {
+    try {
+      setDeletingFilePath(path)
+      await deleteFile(path)
+      await refreshFiles()
+      setToast({ message: 'File deleted', detail: path, type: 'success' })
+    } catch (error) {
+      setToast({
+        message: 'Unable to delete file',
+        detail: error instanceof Error ? error.message : path,
+        type: 'error',
+      })
+    } finally {
+      setDeletingFilePath(null)
+    }
+  }
+
   function handleResetSession() {
     persistActiveRun(null)
     setActiveChatId(null)
@@ -857,6 +918,7 @@ export default function App() {
         activeChatId={activeChatId}
         onSelectChat={handleSwitchChat}
         onDeleteChat={handleDeleteChat}
+        onRenameChat={handleRenameChat}
         onNewChat={handleNewChat}
         onClose={() => setSidebarOpen(false)}
       />
@@ -886,7 +948,11 @@ export default function App() {
             <FileTree tree={tree} selectedPath={selectedPath} onSelect={setSelectedPath} />
           </div>
 
-          <FilePreview file={selectedFile} />
+          <FilePreview
+            file={selectedFile}
+            deleting={selectedFile?.path === deletingFilePath}
+            onDeleteFile={(path) => void handleDeleteFile(path)}
+          />
         </div>
       </div>
 
@@ -930,7 +996,11 @@ export default function App() {
                   <FileTree tree={tree} selectedPath={selectedPath} onSelect={setSelectedPath} />
                 </div>
                 <div className="flex-1 min-w-0 overflow-hidden">
-                  <FilePreview file={selectedFile} />
+                  <FilePreview
+                    file={selectedFile}
+                    deleting={selectedFile?.path === deletingFilePath}
+                    onDeleteFile={(path) => void handleDeleteFile(path)}
+                  />
                 </div>
               </div>
             </div>
