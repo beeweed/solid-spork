@@ -11,6 +11,7 @@ import type { ChatSession, ModelOption, ProviderId, StoredFile, TranscriptMessag
 
 const SETTINGS_KEY = 'agent-workbench-settings'
 const ACTIVE_CHAT_KEY = 'agent-workbench-active-chat'
+const ACTIVE_RUN_KEY = 'agent-workbench-active-run'
 const DEFAULT_SETTINGS: UISettings = {
   provider: 'openrouter',
   model: '',
@@ -19,6 +20,15 @@ const DEFAULT_SETTINGS: UISettings = {
   nvidiaNimApiKey: '',
 }
 const MAX_ITERATIONS = 1000
+
+type MobileTab = 'chat' | 'files'
+
+type ActiveRunState = {
+  sessionId: string
+  assistantId: string
+  chatId: string
+  lastEventId: number
+}
 
 function readStoredSettings(): UISettings {
   if (typeof window === 'undefined') {
@@ -43,6 +53,37 @@ function readStoredSettings(): UISettings {
   }
 }
 
+function readStoredActiveRun(): ActiveRunState | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_RUN_KEY)
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw)
+    if (
+      typeof parsed?.sessionId !== 'string'
+      || typeof parsed?.assistantId !== 'string'
+      || typeof parsed?.chatId !== 'string'
+    ) {
+      return null
+    }
+
+    return {
+      sessionId: parsed.sessionId,
+      assistantId: parsed.assistantId,
+      chatId: parsed.chatId,
+      lastEventId: typeof parsed.lastEventId === 'number' ? parsed.lastEventId : 0,
+    }
+  } catch {
+    return null
+  }
+}
+
 function toConversation(messages: TranscriptMessage[]) {
   return messages
     .filter((message) => message.content.trim())
@@ -59,7 +100,14 @@ async function parseError(response: Response) {
   }
 }
 
-type MobileTab = 'chat' | 'files'
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function buildResumeUrl(sessionId: string, after: number) {
+  const params = new URLSearchParams({ after: String(after) })
+  return `${BACKEND_URL}/api/chat/stream/${encodeURIComponent(sessionId)}?${params.toString()}`
+}
 
 export default function App() {
   const [settings, setSettings] = useState<UISettings>(readStoredSettings)
@@ -80,19 +128,34 @@ export default function App() {
   )
   const isInitialMount = useRef(true)
   const hasRestored = useRef(false)
+  const hasResumedActiveRun = useRef(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
   const [toast, setToast] = useState<{ message: string; detail?: string; type?: 'success' | 'error' } | null>(null)
   const conversationRef = useRef<TranscriptMessage[]>(messages)
+  const messagesRef = useRef(messages)
+  const activeChatIdRef = useRef(activeChatId)
+  const chatsRef = useRef(chats)
+  const activeRunRef = useRef<ActiveRunState | null>(readStoredActiveRun())
+  const toolExecutionRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     conversationRef.current = messages
   }, [messages])
 
+  useEffect(() => { messagesRef.current = messages }, [messages])
+  useEffect(() => { activeChatIdRef.current = activeChatId }, [activeChatId])
+  useEffect(() => { chatsRef.current = chats }, [chats])
+
   useEffect(() => {
     document.documentElement.classList.add('dark')
     void refreshFiles()
     void loadChats()
+
+    if (activeRunRef.current) {
+      setStreaming(true)
+      setThinking(true)
+    }
   }, [])
 
   useEffect(() => {
@@ -112,6 +175,32 @@ export default function App() {
   }, [chats])
 
   useEffect(() => {
+    if (hasResumedActiveRun.current) return
+    const storedRun = activeRunRef.current
+    if (!storedRun) return
+
+    const chat = chats.find((entry) => entry.id === storedRun.chatId)
+    if (!chat) {
+      if (hasRestored.current) {
+        persistActiveRun(null)
+        setStreaming(false)
+        setThinking(false)
+      }
+      return
+    }
+
+    hasResumedActiveRun.current = true
+    setActiveChatId(storedRun.chatId)
+    setMessages(chat.messages)
+    messagesRef.current = chat.messages
+    conversationRef.current = chat.messages
+    setStreaming(true)
+    setThinking(true)
+    setRuntimeError(null)
+    void reconnectToSession(storedRun)
+  }, [chats])
+
+  useEffect(() => {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
   }, [settings])
 
@@ -127,16 +216,6 @@ export default function App() {
     }
   }, [activeChatId])
 
-  const messagesRef = useRef(messages)
-  const activeChatIdRef = useRef(activeChatId)
-  const chatsRef = useRef(chats)
-
-  useEffect(() => { messagesRef.current = messages }, [messages])
-  useEffect(() => { activeChatIdRef.current = activeChatId }, [activeChatId])
-  useEffect(() => { chatsRef.current = chats }, [chats])
-
-  const tree = useMemo(() => buildFileTree(files), [files])
-
   useEffect(() => {
     if (toast) {
       const t = setTimeout(() => setToast(null), 3000)
@@ -144,10 +223,51 @@ export default function App() {
     }
   }, [toast])
 
+  const tree = useMemo(() => buildFileTree(files), [files])
+
   const selectedFile = useMemo(
     () => files.find((file) => file.path === selectedPath) ?? null,
     [files, selectedPath],
   )
+
+  function persistActiveRun(next: ActiveRunState | null) {
+    activeRunRef.current = next
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    if (next) {
+      window.localStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(next))
+      hasResumedActiveRun.current = true
+    } else {
+      window.localStorage.removeItem(ACTIVE_RUN_KEY)
+      hasResumedActiveRun.current = false
+    }
+  }
+
+  function updateActiveRun(partial: Partial<ActiveRunState>) {
+    const current = activeRunRef.current
+    if (!current) {
+      return
+    }
+
+    persistActiveRun({
+      ...current,
+      ...partial,
+      lastEventId: partial.lastEventId === undefined
+        ? current.lastEventId
+        : Math.max(current.lastEventId, partial.lastEventId),
+    })
+  }
+
+  async function syncMessages(nextMessages: TranscriptMessage[]) {
+    setMessages(nextMessages)
+    messagesRef.current = nextMessages
+    conversationRef.current = nextMessages
+    if (activeChatIdRef.current) {
+      await persistChat(activeChatIdRef.current, nextMessages)
+    }
+  }
 
   async function refreshFiles() {
     const nextFiles = await listFiles()
@@ -169,6 +289,7 @@ export default function App() {
         : msgs.find((m) => m.role === 'user')?.content.slice(0, 50) || 'New Chat'
     const updated = { ...chat, title, messages: msgs, updatedAt: new Date().toISOString() }
     setChats((prev) => prev.map((c) => (c.id === chatId ? updated : c)))
+    chatsRef.current = chatsRef.current.map((c) => (c.id === chatId ? updated : c))
     await saveChat(updated)
   }
 
@@ -211,16 +332,22 @@ export default function App() {
     name: string
     content: string
     isError: boolean
-  }) {
+  }): Promise<boolean> {
     const response = await fetch(`${BACKEND_URL}/api/chat/tool-result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
 
+    if (response.status === 404) {
+      return false
+    }
+
     if (!response.ok) {
       throw new Error(await parseError(response))
     }
+
+    return true
   }
 
   async function handleToolCall(eventData: {
@@ -232,6 +359,12 @@ export default function App() {
     displayPath: string
   }) {
     const { sessionId, toolUseId, name, arguments: args } = eventData
+    if (toolExecutionRef.current.has(toolUseId)) {
+      return
+    }
+
+    toolExecutionRef.current.add(toolUseId)
+    let keepReserved = false
 
     try {
       let content = ''
@@ -280,7 +413,7 @@ export default function App() {
         })
       }
 
-      await submitToolResult({
+      keepReserved = await submitToolResult({
         sessionId,
         toolUseId,
         name,
@@ -289,23 +422,31 @@ export default function App() {
       })
       await refreshFiles()
     } catch (error) {
-      await submitToolResult({
-        sessionId,
-        toolUseId,
-        name,
-        content: JSON.stringify({
-          error: {
-            type: 'tool_execution_error',
-            message: error instanceof Error ? error.message : 'Tool execution failed.',
-          },
-        }),
-        isError: true,
-      })
+      try {
+        keepReserved = await submitToolResult({
+          sessionId,
+          toolUseId,
+          name,
+          content: JSON.stringify({
+            error: {
+              type: 'tool_execution_error',
+              message: error instanceof Error ? error.message : 'Tool execution failed.',
+            },
+          }),
+          isError: true,
+        })
+      } catch {
+        keepReserved = false
+      }
       await refreshFiles()
+    } finally {
+      if (!keepReserved) {
+        toolExecutionRef.current.delete(toolUseId)
+      }
     }
   }
 
-  async function consumeSseStream(response: Response, assistantId: string) {
+  async function consumeSseStream(response: Response, assistantId: string, chatId: string): Promise<boolean> {
     if (!response.body) {
       throw new Error('Streaming response body is not available.')
     }
@@ -313,6 +454,7 @@ export default function App() {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    let completed = false
 
     while (true) {
       const { done, value } = await reader.read()
@@ -329,9 +471,14 @@ export default function App() {
 
         const lines = rawEvent.split('\n')
         let eventName = 'message'
+        let eventId: number | null = null
         const dataLines: string[] = []
 
         for (const line of lines) {
+          if (line.startsWith('id:')) {
+            const parsedId = Number(line.slice(3).trim())
+            eventId = Number.isFinite(parsedId) ? parsedId : null
+          }
           if (line.startsWith('event:')) {
             eventName = line.slice(6).trim()
           }
@@ -340,7 +487,22 @@ export default function App() {
           }
         }
 
+        if (eventName === 'ping') {
+          continue
+        }
+
         const eventData = dataLines.length ? JSON.parse(dataLines.join('\n')) : {}
+
+        if (eventName === 'session') {
+          persistActiveRun({
+            sessionId: eventData.sessionId,
+            assistantId,
+            chatId,
+            lastEventId: eventId ?? 0,
+          })
+        } else if (eventId !== null && activeRunRef.current?.assistantId === assistantId) {
+          updateActiveRun({ lastEventId: eventId })
+        }
 
         if (eventName === 'iteration') {
           setCurrentIteration(eventData.current ?? 0)
@@ -357,11 +519,7 @@ export default function App() {
               ? { ...message, content: `${message.content}${eventData.delta ?? ''}`, status: 'streaming' as const }
               : message,
           )
-          setMessages(updatedMessages)
-          messagesRef.current = updatedMessages
-          if (activeChatIdRef.current) {
-            persistChat(activeChatIdRef.current, updatedMessages)
-          }
+          await syncMessages(updatedMessages)
         }
 
         if (eventName === 'tool_call') {
@@ -370,27 +528,26 @@ export default function App() {
             message.id === assistantId
               ? {
                   ...message,
-                  chips: [
-                    ...message.chips,
-                    {
-                      id: eventData.toolUseId,
-                      label: `${eventData.displayLabel}:`,
-                      path: eventData.displayPath,
-                      status: 'pending' as const,
-                    },
-                  ],
+                  chips: message.chips.some((chip) => chip.id === eventData.toolUseId)
+                    ? message.chips
+                    : [
+                        ...message.chips,
+                        {
+                          id: eventData.toolUseId,
+                          label: `${eventData.displayLabel}:`,
+                          path: eventData.displayPath,
+                          status: 'pending' as const,
+                        },
+                      ],
                 }
               : message,
           )
-          setMessages(updatedMessages)
-          messagesRef.current = updatedMessages
-          if (activeChatIdRef.current) {
-            persistChat(activeChatIdRef.current, updatedMessages)
-          }
+          await syncMessages(updatedMessages)
           void handleToolCall(eventData)
         }
 
         if (eventName === 'tool_result_ack') {
+          toolExecutionRef.current.delete(eventData.toolUseId)
           const updatedMessages = messagesRef.current.map((message) =>
             message.id === assistantId
               ? {
@@ -403,43 +560,89 @@ export default function App() {
                 }
               : message,
           )
-          setMessages(updatedMessages)
-          messagesRef.current = updatedMessages
-          if (activeChatIdRef.current) {
-            persistChat(activeChatIdRef.current, updatedMessages)
-          }
+          await syncMessages(updatedMessages)
         }
 
         if (eventName === 'error') {
           const message = eventData.message ?? 'The agent failed to complete the request.'
           setRuntimeError(message)
           setThinking(false)
-          setStreaming(false)
-          setMessages((current) =>
-            current.map((entry) =>
-              entry.id === assistantId
-                ? {
-                    ...entry,
-                    status: 'error',
-                    content: entry.content || message,
-                  }
-                : entry,
-            ),
+          const updatedMessages = messagesRef.current.map((entry) =>
+            entry.id === assistantId
+              ? {
+                  ...entry,
+                  status: 'error' as const,
+                  content: entry.content || message,
+                }
+              : entry,
           )
+          await syncMessages(updatedMessages)
         }
 
         if (eventName === 'done') {
+          completed = true
+          persistActiveRun(null)
           setStreaming(false)
           setThinking(false)
-          setMessages((current) =>
-            current.map((entry) => (entry.id === assistantId ? { ...entry, status: 'done' } : entry)),
-          )
+          const updatedMessages = messagesRef.current.map((entry) => (
+            entry.id === assistantId
+              ? { ...entry, status: (entry.status === 'error' ? 'error' : 'done') as 'error' | 'done' }
+              : entry
+          ))
+          await syncMessages(updatedMessages)
           await refreshFiles()
         }
       }
 
       if (done) {
         break
+      }
+    }
+
+    return completed
+  }
+
+  async function reconnectToSession(run: ActiveRunState, attempt = 0): Promise<void> {
+    const latest = activeRunRef.current
+    if (!latest || latest.sessionId !== run.sessionId) {
+      return
+    }
+
+    setStreaming(true)
+
+    try {
+      const response = await fetch(buildResumeUrl(run.sessionId, latest.lastEventId), {
+        headers: { Accept: 'text/event-stream' },
+      })
+
+      if (response.status === 404) {
+        persistActiveRun(null)
+        setStreaming(false)
+        setThinking(false)
+        setRuntimeError('The live agent session is no longer available. Your saved chat history was restored.')
+        return
+      }
+
+      if (!response.ok) {
+        throw new Error(await parseError(response))
+      }
+
+      const completed = await consumeSseStream(response, latest.assistantId, latest.chatId)
+      if (!completed && activeRunRef.current?.sessionId === run.sessionId) {
+        await delay(Math.min(1000 * (attempt + 1), 3000))
+        await reconnectToSession(run, attempt + 1)
+      }
+    } catch (error) {
+      if (activeRunRef.current?.sessionId !== run.sessionId) {
+        return
+      }
+      const retryDelay = Math.min(1000 * (attempt + 1), 3000)
+      setStreaming(true)
+      setThinking(true)
+      setRuntimeError(error instanceof Error ? `${error.message} Reconnecting…` : 'Connection interrupted. Reconnecting…')
+      await delay(retryDelay)
+      if (activeRunRef.current?.sessionId === run.sessionId) {
+        await reconnectToSession(run, attempt + 1)
       }
     }
   }
@@ -493,10 +696,13 @@ export default function App() {
     const newMessages = [...conversationRef.current, nextUserMessage, nextAssistantMessage]
     const outgoingMessages = toConversation([...conversationRef.current, nextUserMessage])
     setMessages(newMessages)
+    messagesRef.current = newMessages
+    conversationRef.current = newMessages
     setDraft('')
 
-    if (!activeChatIdRef.current) {
-      const chatId = createId('chat')
+    let chatId = activeChatIdRef.current
+    if (!chatId) {
+      chatId = createId('chat')
       const newChat: ChatSession = {
         id: chatId,
         title: draft.trim().slice(0, 50) || 'New Chat',
@@ -507,11 +713,10 @@ export default function App() {
       setActiveChatId(chatId)
       setChats((prev) => [...prev, newChat])
       chatsRef.current = [...chatsRef.current, newChat]
-      messagesRef.current = newMessages
+      activeChatIdRef.current = chatId
       await saveChat(newChat)
     } else {
-      messagesRef.current = newMessages
-      await persistChat(activeChatIdRef.current, newMessages)
+      await persistChat(chatId, newMessages)
     }
 
     try {
@@ -530,24 +735,35 @@ export default function App() {
         throw new Error(await parseError(response))
       }
 
-      await consumeSseStream(response, assistantId)
+      const completed = await consumeSseStream(response, assistantId, chatId)
+      if (!completed) {
+        const activeRun = activeRunRef.current
+        if (activeRun && activeRun.assistantId === assistantId) {
+          setThinking(true)
+          await delay(750)
+          await reconnectToSession(activeRun)
+        }
+      }
 
       if (activeChatIdRef.current) {
         await persistChat(activeChatIdRef.current, messagesRef.current)
       }
     } catch (error) {
+      const activeRun = activeRunRef.current
+      if (activeRun && activeRun.assistantId === assistantId) {
+        setThinking(true)
+        await reconnectToSession(activeRun)
+        return
+      }
+
       const message = error instanceof Error ? error.message : 'Unable to reach the backend stream.'
       setRuntimeError(message)
       setThinking(false)
       setStreaming(false)
-      setMessages((current) =>
-        current.map((entry) =>
-          entry.id === assistantId ? { ...entry, content: entry.content || message, status: 'error' } : entry,
-        ),
+      const updatedMessages = messagesRef.current.map((entry) =>
+        entry.id === assistantId ? { ...entry, content: entry.content || message, status: 'error' as const } : entry,
       )
-      if (activeChatIdRef.current) {
-        await persistChat(activeChatIdRef.current, messagesRef.current)
-      }
+      await syncMessages(updatedMessages)
     }
   }
 
@@ -560,7 +776,8 @@ export default function App() {
       if (currentChat) {
         const updated = { ...currentChat, messages: conversationRef.current, updatedAt: new Date().toISOString() }
         setChats((prev) => prev.map((c) => (c.id === currentId ? updated : c)))
-        saveChat(updated)
+        chatsRef.current = chatsRef.current.map((c) => (c.id === currentId ? updated : c))
+        void saveChat(updated)
       }
     }
 
@@ -568,6 +785,8 @@ export default function App() {
     if (nextChat) {
       setActiveChatId(chatId)
       setMessages(nextChat.messages)
+      messagesRef.current = nextChat.messages
+      conversationRef.current = nextChat.messages
     }
     setSidebarOpen(false)
   }
@@ -575,21 +794,34 @@ export default function App() {
   async function handleDeleteChat(chatId: string) {
     await deleteChat(chatId)
     setChats((prev) => prev.filter((c) => c.id !== chatId))
+    chatsRef.current = chatsRef.current.filter((c) => c.id !== chatId)
     if (activeChatId === chatId) {
       setActiveChatId(null)
       setMessages([])
+      messagesRef.current = []
+      conversationRef.current = []
       setDraft('')
       setRuntimeError(null)
       setCurrentIteration(0)
+      setStreaming(false)
+      setThinking(false)
+    }
+    if (activeRunRef.current?.chatId === chatId) {
+      persistActiveRun(null)
     }
   }
 
   function handleResetSession() {
+    persistActiveRun(null)
     setActiveChatId(null)
     setMessages([])
+    messagesRef.current = []
+    conversationRef.current = []
     setDraft('')
     setRuntimeError(null)
     setCurrentIteration(0)
+    setStreaming(false)
+    setThinking(false)
     setToast({ message: 'Session reset', detail: 'Ready for a new task', type: 'success' })
   }
 
@@ -600,14 +832,20 @@ export default function App() {
       if (currentChat) {
         const updated = { ...currentChat, messages: conversationRef.current, updatedAt: new Date().toISOString() }
         setChats((prev) => prev.map((c) => (c.id === currentId ? updated : c)))
-        saveChat(updated)
+        chatsRef.current = chatsRef.current.map((c) => (c.id === currentId ? updated : c))
+        void saveChat(updated)
       }
     }
+    persistActiveRun(null)
     setActiveChatId(null)
     setMessages([])
+    messagesRef.current = []
+    conversationRef.current = []
     setDraft('')
     setRuntimeError(null)
     setCurrentIteration(0)
+    setStreaming(false)
+    setThinking(false)
     setSidebarOpen(false)
   }
 
@@ -623,9 +861,7 @@ export default function App() {
         onClose={() => setSidebarOpen(false)}
       />
 
-      {/* Desktop Layout */}
       <div className="hidden md:flex h-full bg-[#191919]">
-        {/* LEFT SIDE: CHAT PANEL */}
         <div className="w-[440px] min-w-[380px] max-w-[520px] shrink-0 lg:w-[40%]">
           <div className="flex flex-col h-full m-3 rounded-3xl border border-white/5 overflow-hidden bg-[#1e1e1e]">
             <ChatPanel
@@ -645,19 +881,15 @@ export default function App() {
           </div>
         </div>
 
-        {/* RIGHT SIDE: FILE PANEL */}
         <div className="flex-1 min-w-0 flex h-full">
-          {/* File Explorer Sidebar */}
           <div className="w-56 lg:w-64 shrink-0">
             <FileTree tree={tree} selectedPath={selectedPath} onSelect={setSelectedPath} />
           </div>
 
-          {/* Code Editor Area */}
           <FilePreview file={selectedFile} />
         </div>
       </div>
 
-      {/* Mobile Layout */}
       <div className="md:hidden flex flex-col h-full">
         <div className="flex-1 min-h-0 overflow-hidden">
           {mobileTab === 'chat' ? (
@@ -679,7 +911,6 @@ export default function App() {
             </div>
           ) : (
             <div className="h-full flex flex-col bg-[#1e1e1e]">
-              {/* Mobile file browser header */}
               <div className="flex items-center justify-between px-4 py-3 bg-[#252525] border-b border-border/30 shrink-0">
                 <div className="flex items-center gap-2">
                   <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -706,7 +937,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Mobile Tab Bar */}
         <div className="flex h-14 bg-[#232323] border-t border-border/30 shrink-0">
           <button
             onClick={() => setMobileTab('chat')}
@@ -733,7 +963,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Settings Dialog */}
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -744,7 +973,6 @@ export default function App() {
         onRefreshModels={refreshModels}
       />
 
-      {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-4 right-4 z-50">
           <div className={`flex items-center gap-3 px-4 py-3 rounded-xl bg-[#2d2d2d] border shadow-lg animate-fade-in ${

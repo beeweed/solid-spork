@@ -1,15 +1,15 @@
+import asyncio
 import json
 import re
-import asyncio
 from collections import deque
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Optional, Callable
+from typing import AsyncGenerator, Callable, Optional
 
 import httpx
 
-from src.api_models import ChatRequest
 from src.agent.systemprompt import SYSTEM_PROMPT
 from src.agent.tool_registry import ToolRegistry
+from src.api_models import ChatRequest
 from src.config import Settings
 from src.services.provider_registry import ProviderRegistry
 from src.services.session_manager import AgentSessionManager
@@ -40,21 +40,28 @@ class ReactAgent:
         self._provider_registry = provider_registry
         self._tool_registry = tool_registry
         self._session_manager = session_manager
-        self._recent_tool_signatures: deque[str] = deque(maxlen=6)
 
-    async def run_stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
-        session_id = await self._session_manager.create_session()
+    async def run_stream(self, request: ChatRequest, session_id: Optional[str] = None) -> AsyncGenerator[str, None]:
+        resolved_session_id = session_id or await self._session_manager.create_session()
+        async for event_name, event_payload in self.run_events(request, resolved_session_id):
+            yield self._encode_sse(event_name, event_payload)
+
+    async def run_events(
+        self,
+        request: ChatRequest,
+        session_id: str,
+    ) -> AsyncGenerator[tuple[str, dict], None]:
         provider = self._provider_registry.get(request.provider)
         messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
         messages.extend(message.model_dump() for message in request.messages)
-        self._recent_tool_signatures.clear()
+        recent_tool_signatures: deque[str] = deque(maxlen=6)
 
         try:
-            yield self._encode_sse('session', {'sessionId': session_id})
+            yield 'session', {'sessionId': session_id}
 
             for iteration in range(1, self._settings.max_iterations + 1):
-                yield self._encode_sse('iteration', {'current': iteration, 'max': self._settings.max_iterations})
-                yield self._encode_sse('thinking', {'active': True, 'label': 'thinking....'})
+                yield 'iteration', {'current': iteration, 'max': self._settings.max_iterations}
+                yield 'thinking', {'active': True, 'label': 'thinking....'}
 
                 payload = {
                     'model': request.model,
@@ -72,7 +79,7 @@ class ReactAgent:
                     if event_name == 'final':
                         turn_result = event_payload
                         continue
-                    yield self._encode_sse(event_name, event_payload)
+                    yield event_name, event_payload
 
                 if turn_result is None:
                     raise RuntimeError('Provider stream finished without a final result payload.')
@@ -91,11 +98,11 @@ class ReactAgent:
                         raw_arguments = tool_call['function'].get('arguments', '{}')
                         parsed_arguments = self._parse_tool_arguments(raw_arguments)
                         signature = self._tool_signature(tool_name, parsed_arguments)
-                        if self._is_repeated_tool_call(signature):
+                        if self._is_repeated_tool_call(signature, recent_tool_signatures):
                             raise RuntimeError('Repeated tool call pattern detected. Stopping to prevent a loop.')
 
                         await self._session_manager.register_tool_call(session_id, tool_call['id'])
-                        yield self._encode_sse(
+                        yield (
                             'tool_call',
                             {
                                 'sessionId': session_id,
@@ -111,7 +118,7 @@ class ReactAgent:
                             tool_use_id=tool_call['id'],
                             timeout=self._settings.tool_result_timeout_seconds,
                         )
-                        yield self._encode_sse(
+                        yield (
                             'tool_result_ack',
                             {
                                 'toolUseId': result.tool_use_id,
@@ -131,19 +138,19 @@ class ReactAgent:
 
                 if turn_result.content.strip():
                     messages.append({'role': 'assistant', 'content': turn_result.content})
-                yield self._encode_sse('done', {'status': 'completed'})
+                yield 'done', {'status': 'completed'}
                 return
 
-            yield self._encode_sse(
+            yield (
                 'error',
                 {
                     'message': f'Max iterations ({self._settings.max_iterations}) reached before completion.',
                     'code': 'max_iterations_reached',
                 },
             )
-            yield self._encode_sse('done', {'status': 'max_iterations_reached'})
+            yield 'done', {'status': 'max_iterations_reached'}
         except httpx.HTTPStatusError as exc:
-            yield self._encode_sse(
+            yield (
                 'error',
                 {
                     'message': f'Provider request failed with status {exc.response.status_code}.',
@@ -151,19 +158,19 @@ class ReactAgent:
                     'code': 'provider_http_error',
                 },
             )
-            yield self._encode_sse('done', {'status': 'error'})
+            yield 'done', {'status': 'error'}
         except asyncio.TimeoutError:
-            yield self._encode_sse(
+            yield (
                 'error',
                 {
                     'message': 'Timed out waiting for the browser to finish the requested tool call.',
                     'code': 'tool_timeout',
                 },
             )
-            yield self._encode_sse('done', {'status': 'error'})
+            yield 'done', {'status': 'error'}
         except Exception as exc:  # pragma: no cover
-            yield self._encode_sse('error', {'message': str(exc), 'code': 'agent_error'})
-            yield self._encode_sse('done', {'status': 'error'})
+            yield 'error', {'message': str(exc), 'code': 'agent_error'}
+            yield 'done', {'status': 'error'}
         finally:
             await self._session_manager.cleanup_session(session_id)
 
@@ -244,7 +251,7 @@ class ReactAgent:
     def _tool_signature(self, tool_name: str, payload: dict) -> str:
         return f'{tool_name}:{json.dumps(payload, sort_keys=True)}'
 
-    def _is_repeated_tool_call(self, signature: str) -> bool:
-        self._recent_tool_signatures.append(signature)
-        last_four = list(self._recent_tool_signatures)[-4:]
+    def _is_repeated_tool_call(self, signature: str, recent_tool_signatures: deque[str]) -> bool:
+        recent_tool_signatures.append(signature)
+        last_four = list(recent_tool_signatures)[-4:]
         return len(last_four) == 4 and len(set(last_four)) == 1

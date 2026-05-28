@@ -31,6 +31,7 @@ Agent Workbench is a production-grade browser-based AI coding workspace with a R
 - The frontend executes file tools against IndexedDB and posts tool results back to the backend.
 - Every request resets the visible iteration counter, but the hard backend cap stays at 1000 iterations.
 - All async flows must expose loading, error, and reconnect-safe states.
+- Active agent runs must survive browser refreshes by resuming SSE delivery from a buffered backend session.
 
 ## Feature list
 | Feature | Status | Spec |
@@ -39,3 +40,4 @@ Agent Workbench is a production-grade browser-based AI coding workspace with a R
 | OpenRouter settings and model catalog | done | `specs/openrouter-settings/document.md` |
 | IndexedDB file storage bridge | done | `specs/indexeddb-file-storage/document.md` |
 | Responsive workspace frontend | done | `specs/frontend-workspace/document.md` |
+| Resumable stream sessions | in-progress | `specs/resumable-stream-sessions/document.md` |

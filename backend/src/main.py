@@ -1,10 +1,10 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from src.api_models import ChatRequest, ModelsRequest, ToolResultSubmission
 from src.agent.react_agent import ReactAgent
 from src.agent.tool_registry import ToolRegistry
+from src.api_models import ChatRequest, ModelsRequest, ToolResultSubmission
 from src.config import get_settings
 from src.services.provider_registry import ProviderRegistry
 from src.services.session_manager import AgentSessionManager
@@ -28,6 +28,19 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+
+def _streaming_response(session_id: str, after: int = 0) -> StreamingResponse:
+    headers = {
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+    }
+    return StreamingResponse(
+        app.state.session_manager.stream_session(session_id, after=after),
+        media_type='text/event-stream',
+        headers=headers,
+    )
 
 
 @app.get('/api/health')
@@ -60,18 +73,19 @@ async def submit_tool_result(payload: ToolResultSubmission):
 
 
 @app.post('/api/chat/stream')
-async def chat_stream(payload: ChatRequest, request: Request):
+async def chat_stream(payload: ChatRequest):
     agent: ReactAgent = app.state.react_agent
+    session_id = await app.state.session_manager.create_session()
+    await app.state.session_manager.start_stream(
+        session_id,
+        lambda: agent.run_events(payload, session_id),
+    )
+    return _streaming_response(session_id)
 
-    async def event_generator():
-        async for chunk in agent.run_stream(payload):
-            if await request.is_disconnected():
-                break
-            yield chunk
 
-    headers = {
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-    }
-    return StreamingResponse(event_generator(), media_type='text/event-stream', headers=headers)
+@app.get('/api/chat/stream/{session_id}')
+async def resume_chat_stream(session_id: str, after: int = 0):
+    exists = await app.state.session_manager.has_session(session_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail=f'Unknown session id: {session_id}')
+    return _streaming_response(session_id, after=after)

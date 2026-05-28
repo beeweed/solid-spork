@@ -5,11 +5,11 @@ from src.main import app
 
 
 class StubAgent:
-    async def run_stream(self, _payload):
-        yield 'event: session\ndata: {"sessionId":"session_test"}\n\n'
-        yield 'event: iteration\ndata: {"current":1,"max":1000}\n\n'
-        yield 'event: text_delta\ndata: {"delta":"Hello"}\n\n'
-        yield 'event: done\ndata: {"status":"completed"}\n\n'
+    async def run_events(self, _payload, session_id):
+        yield 'session', {'sessionId': session_id}
+        yield 'iteration', {'current': 1, 'max': 1000}
+        yield 'text_delta', {'delta': 'Hello'}
+        yield 'done', {'status': 'completed'}
 
 
 @pytest.mark.asyncio
