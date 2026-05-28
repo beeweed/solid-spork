@@ -354,7 +354,7 @@ export default function App() {
           setThinking(false)
           const updatedMessages = messagesRef.current.map((message) =>
             message.id === assistantId
-              ? { ...message, content: `${message.content}${eventData.delta ?? ''}`, status: 'streaming' }
+              ? { ...message, content: `${message.content}${eventData.delta ?? ''}`, status: 'streaming' as const }
               : message,
           )
           setMessages(updatedMessages)
@@ -376,7 +376,7 @@ export default function App() {
                       id: eventData.toolUseId,
                       label: `${eventData.displayLabel}:`,
                       path: eventData.displayPath,
-                      status: 'pending',
+                      status: 'pending' as const,
                     },
                   ],
                 }
@@ -397,7 +397,7 @@ export default function App() {
                   ...message,
                   chips: message.chips.map((chip) =>
                     chip.id === eventData.toolUseId
-                      ? { ...chip, status: eventData.isError ? 'error' : 'done' }
+                      ? { ...chip, status: (eventData.isError ? 'error' : 'done') as 'error' | 'done' }
                       : chip,
                   ),
                 }
