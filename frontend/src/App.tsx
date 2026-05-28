@@ -352,53 +352,62 @@ export default function App() {
 
         if (eventName === 'text_delta') {
           setThinking(false)
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? { ...message, content: `${message.content}${eventData.delta ?? ''}`, status: 'streaming' }
-                : message,
-            ),
+          const updatedMessages = messagesRef.current.map((message) =>
+            message.id === assistantId
+              ? { ...message, content: `${message.content}${eventData.delta ?? ''}`, status: 'streaming' }
+              : message,
           )
+          setMessages(updatedMessages)
+          messagesRef.current = updatedMessages
+          if (activeChatIdRef.current) {
+            persistChat(activeChatIdRef.current, updatedMessages)
+          }
         }
 
         if (eventName === 'tool_call') {
           setThinking(false)
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    chips: [
-                      ...message.chips,
-                      {
-                        id: eventData.toolUseId,
-                        label: `${eventData.displayLabel}:`,
-                        path: eventData.displayPath,
-                        status: 'pending',
-                      },
-                    ],
-                  }
-                : message,
-            ),
+          const updatedMessages = messagesRef.current.map((message) =>
+            message.id === assistantId
+              ? {
+                  ...message,
+                  chips: [
+                    ...message.chips,
+                    {
+                      id: eventData.toolUseId,
+                      label: `${eventData.displayLabel}:`,
+                      path: eventData.displayPath,
+                      status: 'pending',
+                    },
+                  ],
+                }
+              : message,
           )
+          setMessages(updatedMessages)
+          messagesRef.current = updatedMessages
+          if (activeChatIdRef.current) {
+            persistChat(activeChatIdRef.current, updatedMessages)
+          }
           void handleToolCall(eventData)
         }
 
         if (eventName === 'tool_result_ack') {
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    chips: message.chips.map((chip) =>
-                      chip.id === eventData.toolUseId
-                        ? { ...chip, status: eventData.isError ? 'error' : 'done' }
-                        : chip,
-                    ),
-                  }
-                : message,
-            ),
+          const updatedMessages = messagesRef.current.map((message) =>
+            message.id === assistantId
+              ? {
+                  ...message,
+                  chips: message.chips.map((chip) =>
+                    chip.id === eventData.toolUseId
+                      ? { ...chip, status: eventData.isError ? 'error' : 'done' }
+                      : chip,
+                  ),
+                }
+              : message,
           )
+          setMessages(updatedMessages)
+          messagesRef.current = updatedMessages
+          if (activeChatIdRef.current) {
+            persistChat(activeChatIdRef.current, updatedMessages)
+          }
         }
 
         if (eventName === 'error') {
@@ -497,8 +506,11 @@ export default function App() {
       }
       setActiveChatId(chatId)
       setChats((prev) => [...prev, newChat])
+      chatsRef.current = [...chatsRef.current, newChat]
+      messagesRef.current = newMessages
       await saveChat(newChat)
     } else {
+      messagesRef.current = newMessages
       await persistChat(activeChatIdRef.current, newMessages)
     }
 

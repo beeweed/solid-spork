@@ -225,33 +225,6 @@ export function ChatPanel({
                           ))}
                         </div>
                       )}
-
-                      {message.chips.map((chip) => (
-                        <div key={chip.id} className="rounded-xl bg-[#2d2d2f] border border-border/30 overflow-hidden mb-2">
-                          <div className="flex items-center gap-3 px-3 py-2.5">
-                            <div className="w-6 h-6 rounded-md bg-blue-500/10 flex items-center justify-center">
-                              <svg className="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                              </svg>
-                            </div>
-                            <span className="text-xs font-mono text-muted-foreground">{chip.label.replace(':', '')}</span>
-                            <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded ${
-                                chip.status === 'error'
-                                  ? 'bg-red-500/15 text-red-400'
-                                  : chip.status === 'done'
-                                    ? 'bg-emerald-500/15 text-emerald-400'
-                                    : 'bg-primary/15 text-primary'
-                              }`}
-                            >
-                              {chip.status === 'error' ? 'error' : chip.status === 'done' ? 'success' : 'pending'}
-                            </span>
-                            <svg className="w-4 h-4 text-muted-foreground ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                            </svg>
-                          </div>
-                        </div>
-                      ))}
                     </div>
                   </div>
                 )}
