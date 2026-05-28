@@ -1,14 +1,15 @@
-import { PanelRightOpen, Settings2 } from 'lucide-react'
+import { Menu, PanelRightOpen, Settings2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { ChatPanel } from '@/components/workspace/chat-panel'
+import { ChatSidebar } from '@/components/workspace/chat-sidebar'
 import { FilePreview } from '@/components/workspace/file-preview'
 import { FileTree } from '@/components/workspace/file-tree'
 import { SettingsDialog } from '@/components/workspace/settings-dialog'
 import { BACKEND_URL, createId } from '@/lib/config'
-import { buildFileTree, formatFileForRead, listFiles, readFile, writeFile } from '@/lib/indexeddb'
-import type { ModelOption, ProviderId, StoredFile, TranscriptMessage, UISettings } from '@/types'
+import { buildFileTree, deleteChat, formatFileForRead, listChats, listFiles, readFile, saveChat, writeFile } from '@/lib/indexeddb'
+import type { ChatSession, ModelOption, ProviderId, StoredFile, TranscriptMessage, UISettings } from '@/types'
 import { PROVIDER_LABELS } from '@/types'
 
 const SETTINGS_KEY = 'agent-workbench-settings'
@@ -75,6 +76,9 @@ export default function App() {
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const [currentIteration, setCurrentIteration] = useState(0)
+  const [chats, setChats] = useState<ChatSession[]>([])
+  const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const conversationRef = useRef<TranscriptMessage[]>(messages)
 
   useEffect(() => {
@@ -84,11 +88,20 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.add('dark')
     void refreshFiles()
+    void loadChats()
   }, [])
 
   useEffect(() => {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
   }, [settings])
+
+  const messagesRef = useRef(messages)
+  const activeChatIdRef = useRef(activeChatId)
+  const chatsRef = useRef(chats)
+
+  useEffect(() => { messagesRef.current = messages }, [messages])
+  useEffect(() => { activeChatIdRef.current = activeChatId }, [activeChatId])
+  useEffect(() => { chatsRef.current = chats }, [chats])
 
   const tree = useMemo(() => buildFileTree(files), [files])
 
@@ -101,6 +114,23 @@ export default function App() {
     const nextFiles = await listFiles()
     setFiles(nextFiles)
     setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null)
+  }
+
+  async function loadChats() {
+    const loadedChats = await listChats()
+    setChats(loadedChats)
+  }
+
+  async function persistChat(chatId: string, msgs: TranscriptMessage[]) {
+    const chat = chatsRef.current.find((c) => c.id === chatId)
+    if (!chat) return
+    const title =
+      chat.title !== 'New Chat'
+        ? chat.title
+        : msgs.find((m) => m.role === 'user')?.content.slice(0, 50) || 'New Chat'
+    const updated = { ...chat, title, messages: msgs, updatedAt: new Date().toISOString() }
+    setChats((prev) => prev.map((c) => (c.id === chatId ? updated : c)))
+    await saveChat(updated)
   }
 
   async function refreshModels(apiKey: string, provider: ProviderId): Promise<ModelOption[]> {
@@ -412,9 +442,26 @@ export default function App() {
     }
 
     const provider = activeProvider()
+    const newMessages = [...conversationRef.current, nextUserMessage, nextAssistantMessage]
     const outgoingMessages = toConversation([...conversationRef.current, nextUserMessage])
-    setMessages((current) => [...current, nextUserMessage, nextAssistantMessage])
+    setMessages(newMessages)
     setDraft('')
+
+    if (!activeChatIdRef.current) {
+      const chatId = createId('chat')
+      const newChat: ChatSession = {
+        id: chatId,
+        title: draft.trim().slice(0, 50) || 'New Chat',
+        messages: newMessages,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+      setActiveChatId(chatId)
+      setChats((prev) => [...prev, newChat])
+      await saveChat(newChat)
+    } else {
+      await persistChat(activeChatIdRef.current, newMessages)
+    }
 
     try {
       const response = await fetch(`${BACKEND_URL}/api/chat/stream`, {
@@ -433,6 +480,10 @@ export default function App() {
       }
 
       await consumeSseStream(response, assistantId)
+
+      if (activeChatIdRef.current) {
+        await persistChat(activeChatIdRef.current, messagesRef.current)
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to reach the backend stream.'
       setRuntimeError(message)
@@ -443,14 +494,83 @@ export default function App() {
           entry.id === assistantId ? { ...entry, content: entry.content || message, status: 'error' } : entry,
         ),
       )
+      if (activeChatIdRef.current) {
+        await persistChat(activeChatIdRef.current, messagesRef.current)
+      }
     }
+  }
+
+  function handleSwitchChat(chatId: string) {
+    if (chatId === activeChatId) return
+
+    const currentId = activeChatIdRef.current
+    if (currentId) {
+      const currentChat = chatsRef.current.find((c) => c.id === currentId)
+      if (currentChat) {
+        const updated = { ...currentChat, messages: conversationRef.current, updatedAt: new Date().toISOString() }
+        setChats((prev) => prev.map((c) => (c.id === currentId ? updated : c)))
+        saveChat(updated)
+      }
+    }
+
+    const nextChat = chatsRef.current.find((c) => c.id === chatId)
+    if (nextChat) {
+      setActiveChatId(chatId)
+      setMessages(nextChat.messages)
+    }
+    setSidebarOpen(false)
+  }
+
+  async function handleDeleteChat(chatId: string) {
+    await deleteChat(chatId)
+    setChats((prev) => prev.filter((c) => c.id !== chatId))
+    if (activeChatId === chatId) {
+      setActiveChatId(null)
+      setMessages([])
+      setDraft('')
+      setRuntimeError(null)
+      setCurrentIteration(0)
+    }
+  }
+
+  function handleNewChat() {
+    const currentId = activeChatIdRef.current
+    if (currentId) {
+      const currentChat = chatsRef.current.find((c) => c.id === currentId)
+      if (currentChat) {
+        const updated = { ...currentChat, messages: conversationRef.current, updatedAt: new Date().toISOString() }
+        setChats((prev) => prev.map((c) => (c.id === currentId ? updated : c)))
+        saveChat(updated)
+      }
+    }
+    setActiveChatId(null)
+    setMessages([])
+    setDraft('')
+    setRuntimeError(null)
+    setCurrentIteration(0)
+    setSidebarOpen(false)
   }
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(220,38,38,0.18),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(120,20,20,0.18),_transparent_24%),linear-gradient(180deg,#050505_0%,#090909_40%,#050505_100%)] text-white">
       <div className="mx-auto flex min-h-screen w-full max-w-[1680px] flex-col px-4 pb-6 pt-4 sm:px-6 lg:px-8">
+        <ChatSidebar
+          open={sidebarOpen}
+          chats={chats}
+          activeChatId={activeChatId}
+          onSelectChat={handleSwitchChat}
+          onDeleteChat={handleDeleteChat}
+          onNewChat={handleNewChat}
+          onClose={() => setSidebarOpen(false)}
+        />
         <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[1.75rem] border border-white/10 bg-black/35 px-4 py-4 backdrop-blur sm:px-5">
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              className="rounded-lg p-2 text-zinc-400 hover:text-zinc-100"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/12 text-red-100 shadow-[0_0_45px_rgba(239,68,68,0.18)]">
               <PanelRightOpen className="h-5 w-5" />
             </div>

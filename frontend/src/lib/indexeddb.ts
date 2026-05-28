@@ -1,8 +1,9 @@
-import type { FileTreeNode, StoredFile } from '@/types'
+import type { ChatSession, FileTreeNode, StoredFile } from '@/types'
 
 const DB_NAME = 'agent-workbench'
-const STORE_NAME = 'files'
-const VERSION = 1
+const FILE_STORE = 'files'
+const CHAT_STORE = 'chats'
+const VERSION = 2
 const ROOT_PREFIX = '/home/user/'
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -10,9 +11,12 @@ function openDatabase(): Promise<IDBDatabase> {
     const request = indexedDB.open(DB_NAME, VERSION)
     request.onupgradeneeded = () => {
       const database = request.result
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
-        const store = database.createObjectStore(STORE_NAME, { keyPath: 'path' })
+      if (!database.objectStoreNames.contains(FILE_STORE)) {
+        const store = database.createObjectStore(FILE_STORE, { keyPath: 'path' })
         store.createIndex('updatedAt', 'updatedAt')
+      }
+      if (!database.objectStoreNames.contains(CHAT_STORE)) {
+        database.createObjectStore(CHAT_STORE, { keyPath: 'id' })
       }
     }
     request.onsuccess = () => resolve(request.result)
@@ -20,11 +24,11 @@ function openDatabase(): Promise<IDBDatabase> {
   })
 }
 
-async function withStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => Promise<T>): Promise<T> {
+async function withStore<T>(storeName: string, mode: IDBTransactionMode, action: (store: IDBObjectStore) => Promise<T>): Promise<T> {
   const db = await openDatabase()
   return new Promise<T>((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, mode)
-    const store = transaction.objectStore(STORE_NAME)
+    const transaction = db.transaction(storeName, mode)
+    const store = transaction.objectStore(storeName)
 
     action(store)
       .then((value) => {
@@ -62,7 +66,7 @@ export async function writeFile(path: string, content: string): Promise<StoredFi
     size: new Blob([content]).size,
   }
 
-  return withStore('readwrite', async (store) => {
+  return withStore(FILE_STORE, 'readwrite', async (store) => {
     await requestToPromise(store.put(record))
     return record
   })
@@ -70,14 +74,14 @@ export async function writeFile(path: string, content: string): Promise<StoredFi
 
 export async function readFile(path: string): Promise<StoredFile | null> {
   const normalizedPath = normalizePath(path)
-  return withStore('readonly', async (store) => {
+  return withStore(FILE_STORE, 'readonly', async (store) => {
     const result = await requestToPromise<StoredFile | undefined>(store.get(normalizedPath))
     return result ?? null
   })
 }
 
 export async function listFiles(): Promise<StoredFile[]> {
-  return withStore('readonly', async (store) => {
+  return withStore(FILE_STORE, 'readonly', async (store) => {
     const records = await requestToPromise<StoredFile[]>(store.getAll())
     return [...records].sort((left, right) => left.path.localeCompare(right.path))
   })
@@ -87,6 +91,34 @@ function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'))
+  })
+}
+
+export async function listChats(): Promise<ChatSession[]> {
+  return withStore(CHAT_STORE, 'readonly', async (store) => {
+    const records = await requestToPromise<ChatSession[]>(store.getAll())
+    return [...records].sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    )
+  })
+}
+
+export async function saveChat(chat: ChatSession): Promise<void> {
+  return withStore(CHAT_STORE, 'readwrite', async (store) => {
+    await requestToPromise(store.put(chat))
+  })
+}
+
+export async function deleteChat(id: string): Promise<void> {
+  return withStore(CHAT_STORE, 'readwrite', async (store) => {
+    await requestToPromise(store.delete(id))
+  })
+}
+
+export async function getChat(id: string): Promise<ChatSession | null> {
+  return withStore(CHAT_STORE, 'readonly', async (store) => {
+    const result = await requestToPromise<ChatSession | undefined>(store.get(id))
+    return result ?? null
   })
 }
 

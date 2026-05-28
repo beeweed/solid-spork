@@ -46,6 +46,14 @@ export interface StoredFile {
   size: number
 }
 
+export interface ChatSession {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messages: TranscriptMessage[]
+}
+
 export interface FileTreeNode {
   name: string
   path: string
